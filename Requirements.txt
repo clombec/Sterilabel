@@ -1,0 +1,7 @@
+customtkinter
+Pillow
+pyyaml
+python_dateutil
+python_barcode
+watchdog
+pywin32
