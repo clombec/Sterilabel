@@ -184,7 +184,6 @@ class SterilabelGUIApp(ctk.CTk):
             self.configdata["DEFAULT_COPIES"] = int(copies_var.get())
 
             self.write_config_yaml()
-            self.digit_button_color()
             self.app.reload_watchdog(self.configdata.get("WATCH_ROOT"))
             win.destroy()
 
@@ -242,18 +241,32 @@ class SterilabelGUIApp(ctk.CTk):
         self.labelinfo_lbl.pack(pady=(0,10))
 
          # nb copies label
-        copies_lbl = ctk.CTkLabel(self, text="Nombre de copies :", font=ctk.CTkFont(size=14))
-        copies_lbl.pack(pady=(10,0))
+        copies_frame = ctk.CTkFrame(self)
+        copies_frame.pack(pady=(10,0))
+        
+        copies_lbl = ctk.CTkLabel(copies_frame, text="Nombre de copies :", font=ctk.CTkFont(size=14))
+        copies_lbl.pack(side="left", padx=(0, 10))
+        
+        self.copies_entry = ctk.CTkEntry(copies_frame, width=60, justify="center")
+        self.copies_entry.insert(0, str(self.configdata.get("DEFAULT_COPIES")))
+        self.copies_entry.pack(side="left")
+
+        delbtn = ctk.CTkButton(
+                    copies_frame,
+                    text="DEL",
+                    width=50,
+                    command=self.delcopiesentry
+                )
+        delbtn.pack(side="left", padx=(10,0))
         
         # -------- 3×3 BUTTON GRID (1 to 9) --------
         buttons_frame = ctk.CTkFrame(self)
         buttons_frame.pack(pady=5)
 
         # Create a 3×3 grid
-        number = 1
-        self.digit_btn=[]
-        for row in range(3):
-            for col in range(3):
+        number = 0
+        for row in range(2):
+            for col in range(5):
                 btn = ctk.CTkButton(
                     buttons_frame,
                     text=str(number),
@@ -262,8 +275,6 @@ class SterilabelGUIApp(ctk.CTk):
                 )
                 btn.grid(row=row, column=col, padx=5, pady=5)
                 number += 1
-                self.digit_btn.append(btn)
-        self.digit_button_color()
 
         # -------- BOUTON IMPRIMER --------
         self.print_button = ctk.CTkButton(
@@ -285,6 +296,9 @@ class SterilabelGUIApp(ctk.CTk):
         )
         self.manual_button.pack(side="right", pady=10, padx=5)
 
+    def delcopiesentry(self):
+        self.copies_entry.delete(0, tk.END)
+
     def _redraw_border(self):        
         self.image_frame.configure(border_color=self.frame_color if self.frame_color else "transparent")
 
@@ -297,45 +311,34 @@ class SterilabelGUIApp(ctk.CTk):
             raise ValueError("Invalid color")
         self._redraw_border()
 
-    def digit_button_color(self):
-        nbc = self.configdata.get("DEFAULT_COPIES")
-        number = 1
-        for btn in self.digit_btn:
-            if nbc == number:
-                btn.configure(fg_color="#41d8fd", hover_color="#41d8fd")  # Select color
-            else:
-                btn.configure(fg_color=ctk.ThemeManager.theme["CTkButton"]["fg_color"], hover_color=ctk.ThemeManager.theme["CTkButton"]["hover_color"])  # default color
-            number += 1
-
     def set_copies(self, number):
-        self.configdata["DEFAULT_COPIES"] = number
-        self.digit_button_color()
+        self.copies_entry.insert(len(self.copies_entry.get()), str(number))
 
     def _process_event_queue(self):
         try:
             while not self.event_queue.empty():
-                kind, str = self.event_queue.get_nowait()
+                kind, str, str2 = self.event_queue.get_nowait()
                 if kind == "created":
                     self.bmanualsearch = False
                     self.app.parse_file(str)
                 if kind == "frame_color":
                     self.set_frame_color(str)
                 if kind == "show_image":
-                    self.show_image(str)
+                    self.show_image(str, str2)
         except:
             traceback.print_exc()
         finally:
             self.after(200, self._process_event_queue)
 
-    def show_image(self, path):
+    def show_image(self, path, str):
         try:
             image = Image.open(path)
             ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=(600, 240))
             self.image_label.configure(image=ctk_image)
             if not self.bmanualsearch:
-                self.labelinfo_lbl.configure(text=f"Chargé Automatiquement le : {time.strftime('%d/%m/%Y à %H:%M')}")
+                self.labelinfo_lbl.configure(text=f"Chargé Automatiquement le : {time.strftime('%d/%m/%Y à %H:%M')} - {str}")
             else:
-                self.labelinfo_lbl.configure(text=f"Chargé Manuellement le : {time.strftime('%d/%m/%Y à %H:%M')}")
+                self.labelinfo_lbl.configure(text=f"Chargé Manuellement le : {time.strftime('%d/%m/%Y à %H:%M')} - {str}")
         except Exception as e:
             print(f"Error loading image: {e}")
         self.current_image_path = path
@@ -356,7 +359,7 @@ class SterilabelGUIApp(ctk.CTk):
 
     def print_action(self):
         if self.current_image_path:
-            self.app.print_action(self.current_image_path, self.configdata.get("DEFAULT_COPIES"))
+            self.app.print_action(self.current_image_path, int(self.copies_entry.get()))
 
 # --- Lancement ---
 if __name__ == "__main__":

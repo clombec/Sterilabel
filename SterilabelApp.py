@@ -63,7 +63,7 @@ class SterilabelApp:
 
         tmp = os.path.join(tempfile.gettempdir(), "etiquette_label.png")
         PrintLabel.generate_label(tmp, lines, barcode)
-        self.show_image(tmp)
+        self.show_image(tmp, p.get("success_message"))
 
 
     def parse_pro_file(self,filepath):
@@ -74,6 +74,7 @@ class SterilabelApp:
             "total": None,
             "chargement_id": None,
             "success": False,
+            "success_message" : None,
             "serial_number": None
         }
 
@@ -104,8 +105,9 @@ class SterilabelApp:
                     result["chargement_id"] = "-" if val.lower().startswith("désactiv") else val
 
             if line.startswith("40"):
-                if re.search(r"Terminé avec Succès$", line, flags=re.IGNORECASE) or re.search(r"Terminé avec succès$", line, flags=re.IGNORECASE):
+                if re.search(r"terminé avec succès$", line.lower(), flags=re.IGNORECASE) or re.search(r"test réussi$", line, flags=re.IGNORECASE):
                     result["success"] = True
+                    result["success_message"] = line[3:]
 
             if line.startswith("80") and ("N°" in line or "Série" in line or "Serie" in line):
                 m = re.search(r"N.?\s*de\s*S[ée]rie[:\s]*(.+)$", line, flags=re.IGNORECASE)
@@ -117,10 +119,10 @@ class SterilabelApp:
         return result
     
     def set_frame_color(self, color):
-        self.event_queue.put(("frame_color", color))
+        self.event_queue.put(("frame_color", color, ""))
 
-    def show_image(self, path):
-        self.event_queue.put(("show_image", path))
+    def show_image(self, path, str):
+        self.event_queue.put(("show_image", path, str))
 
     def print_action(self, img_path, copies):
         if not os.path.exists(img_path):
@@ -134,7 +136,10 @@ class SterilabelApp:
             messagebox.showerror("Erreur d'impression", str(e))
 
     def reload_watchdog(self, watch_root):
-        self.stop()
+        try:
+            self.observer.stop()
+        except:
+            pass
         self.watch_root = watch_root
         self._start_observer()
 
@@ -153,7 +158,7 @@ class PROFileHandler(FileSystemEventHandler):
 
     def on_created(self, event):
         if not event.is_directory and event.src_path.lower().endswith(".pro"):
-            self.event_queue.put(("created", event.src_path))
+            self.event_queue.put(("created", event.src_path, ""))
 
 #    def on_moved(self, event):
 #        if not event.is_directory and event.dest_path.lower().endswith(".pro"):
