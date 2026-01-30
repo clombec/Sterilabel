@@ -36,7 +36,7 @@ class SterilabelApp:
         parsed = self._try_parse_with_retries(path, delay=delay)
         if parsed:
             parsed["_source_path"] = path
-            self._handle_parsed_pro(parsed)
+            return self._handle_parsed_pro(parsed)
 
     def _try_parse_with_retries(self, path, retries=5, delay=2):
         import time
@@ -53,18 +53,20 @@ class SterilabelApp:
 
         dt = datetime.datetime.strptime(p.get("date"), "%d.%m.%Y")
         expiration = dt + relativedelta(months=3)
+        barcode = f"3{p.get('filename')}"
         lines = [
-            f"MELAG 44 B+  {p.get('serial_number')}",
+            f"MELAG 44 B+",
+            f"{p.get('serial_number')}",
             f"{dt.strftime('%d/%m/%Y')} - Exp: {expiration.strftime('%d/%m/%Y')}",
             f"Charges: {p.get('charges_jour')} / Total: {p.get('total')}",
-            f"ID: {p.get('chargement_id')}"
+            f"ID: {p.get('chargement_id')}",
+            f"{barcode}"
         ]
-        barcode = f"3{p.get('filename')}"
 
         tmp = os.path.join(tempfile.gettempdir(), "etiquette_label.png")
-        PrintLabel.generate_label(tmp, lines, barcode)
+        PrintLabel.generate_label(tmp, lines)
         self.show_image(tmp, p.get("success_message"))
-
+        return lines
 
     def parse_pro_file(self,filepath):
         result = {
@@ -124,16 +126,21 @@ class SterilabelApp:
     def show_image(self, path, str):
         self.event_queue.put(("show_image", path, str))
 
-    def print_action(self, img_path, copies):
-        if not os.path.exists(img_path):
-            messagebox.showerror("Print error", "Image non trouvée")
-            return
-        
-        try:
-            for _ in range(copies):
+    def print_action(self, lines, copies):
+        tlines = lines.copy()
+        barcodetxt = tlines[-1]
+        for i in range(copies):
+            img_path = os.path.join(tempfile.gettempdir(), "etiquette_label.png")
+            tlines[-1] = barcodetxt + str(i+1).zfill(2)
+            PrintLabel.generate_label(img_path, tlines)
+            if not os.path.exists(img_path):
+                messagebox.showerror("Print error", "Image non trouvée")
+                return
+            
+            try:
                 PrintLabel.print_image(img_path)
-        except Exception as e:
-            messagebox.showerror("Erreur d'impression", str(e))
+            except Exception as e:
+                messagebox.showerror("Erreur d'impression", str(e))
 
     def reload_watchdog(self, watch_root):
         try:

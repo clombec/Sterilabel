@@ -37,6 +37,7 @@ class SterilabelGUIApp(ctk.CTk):
         self.event_queue = queue.Queue()
         self.frame_color = None
         self.current_image_path = None
+        self.lines = []
         self.bmanualsearch = False
         self.read_config_yaml()
 
@@ -320,7 +321,7 @@ class SterilabelGUIApp(ctk.CTk):
                 kind, str, str2 = self.event_queue.get_nowait()
                 if kind == "created":
                     self.bmanualsearch = False
-                    self.app.parse_file(str)
+                    self.lines = self.app.parse_file(str)
                 if kind == "frame_color":
                     self.set_frame_color(str)
                 if kind == "show_image":
@@ -333,7 +334,7 @@ class SterilabelGUIApp(ctk.CTk):
     def show_image(self, path, str):
         try:
             image = Image.open(path)
-            ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=(600, 240))
+            ctk_image = ctk.CTkImage(light_image=image, dark_image=image, size=(240, 240))
             self.image_label.configure(image=ctk_image)
             if not self.bmanualsearch:
                 self.labelinfo_lbl.configure(text=f"Chargé Automatiquement le : {time.strftime('%d/%m/%Y à %H:%M')} - {str}")
@@ -348,7 +349,7 @@ class SterilabelGUIApp(ctk.CTk):
         chosen = filedialog.askopenfilename(initialdir=folder, filetypes=[("PRO","*.PRO *.pro")])
         if chosen:
             self.bmanualsearch = True
-            self.app.parse_file(chosen, delay=0)
+            self.lines = self.app.parse_file(chosen, delay=0)
 
     def on_close(self):
         try:
@@ -359,7 +360,7 @@ class SterilabelGUIApp(ctk.CTk):
 
     def print_action(self):
         if self.current_image_path:
-            self.app.print_action(self.current_image_path, int(self.copies_entry.get()))
+            self.app.print_action(self.lines, int(self.copies_entry.get()))
 
 # --- Lancement ---
 if __name__ == "__main__":
