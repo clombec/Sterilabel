@@ -206,7 +206,7 @@ class SterilabelGUIApp(ctk.CTk):
             "\n\nUtilisation : Le logiciel retrouve automatiquement les données enregistrées par l'autoclave à la fin du cycle et les affiche dans sa fenêtre principale.",
             "La date et l'heure de la mise à jour de l'étiquette est affichée sous l'image et permet de vérifier qu'il s'agit bien du dernier cycle effectué.",
             "Sélectionner le nombre d'étiquettes à imprimer puis cliquer sur imprimer. L'imprimante va imprimer le nombre d'étiquettes demandé.",
-            "\n\nSi besoin d'imprimer une étiquette pour un cycle précédent, cliquer sur le bouton 'Recherche manuelle' et sélectionner le fichier .pro correspondant au cycle voulu.",
+            "\n\nSi besoin d'imprimer une étiquette pour un cycle précédent, cliquer sur le bouton 'Recherche manuelle' et sélectionner le fichier .gpd (ou .pro) correspondant au cycle voulu.",
         ])
 
         ctk.CTkLabel(win, text=f"Version : {version}").pack(pady=6)
@@ -346,7 +346,7 @@ class SterilabelGUIApp(ctk.CTk):
     
     def on_manual_search(self):
         folder = self.app.watchfolder
-        chosen = filedialog.askopenfilename(initialdir=folder, filetypes=[("PRO","*.PRO *.pro")])
+        chosen = filedialog.askopenfilename(initialdir=folder, filetypes=[("Cycles autoclave","*.GPD *.gpd *.PRO *.pro"), ("GPD","*.GPD *.gpd"), ("PRO","*.PRO *.pro")])
         if chosen:
             self.bmanualsearch = True
             self.lines = self.app.parse_file(chosen, delay=0)

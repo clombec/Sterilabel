@@ -3,6 +3,7 @@ import re
 import tempfile
 import threading
 import datetime
+import time
 from tkinter import messagebox
 from dateutil.relativedelta import relativedelta
 from watchdog.observers import Observer
@@ -10,12 +11,23 @@ from watchdog.events import FileSystemEventHandler
 
 import PrintLabel
 
+# A .GPD file is written by the autoclave while the cycle runs: it is complete
+# once its end marker line has been written.
+GPD_END_MARKER = "<301"
+GPD_POLL_SECONDS = 3
+GPD_TIMEOUT_SECONDS = 3 * 3600   # give up on a .GPD that never completes
+
+
 class SterilabelApp:
     def __init__(self, watch_root, event_queue):
         self.watch_root = watch_root
         self.event_queue = event_queue
         self.observer = None
+        self._pending_gpd = {}        # path -> time first seen
+        self._done_gpd = set()        # paths already sent to the GUI
+        self._lock = threading.Lock()
         self._start_observer()
+        threading.Thread(target=self._watch_pending_gpd, daemon=True).start()
 
     # -------------------------
     # Watchdog
@@ -24,13 +36,48 @@ class SterilabelApp:
         self.watchfolder = current_mm_yyyy_folder(self.watch_root)
         if not os.path.exists(self.watchfolder):
             self.watchfolder = self.watch_root
-        handler = PROFileHandler(self.event_queue)
+        handler = CycleFileHandler(self)
         self.observer = Observer()
         self.observer.schedule(handler, self.watchfolder, recursive=False)
         if self.watchfolder != self.watch_root:
             self.observer.schedule(handler, self.watch_root, recursive=False)
         thread = threading.Thread(target=self.observer.start, daemon=True)
         thread.start()
+
+    # -------------------------
+    # Cycle file detection
+    # -------------------------
+    def on_gpd_seen(self, path):
+        """Called by the watchdog when a .GPD file is created or modified."""
+        with self._lock:
+            if path not in self._done_gpd:
+                self._pending_gpd.setdefault(path, time.time())
+
+    def on_pro_created(self, path):
+        """The .PRO is only used when no complete .GPD exists for the cycle
+        (the graphic log is optional and is lost if the NAS is unreachable)."""
+        gpd = find_sibling(path, ".GPD")
+        if gpd and is_gpd_complete(gpd):
+            return
+        if gpd:
+            with self._lock:
+                self._pending_gpd.pop(gpd, None)
+                self._done_gpd.add(gpd)
+        self.event_queue.put(("created", path, ""))
+
+    def _watch_pending_gpd(self):
+        while True:
+            time.sleep(GPD_POLL_SECONDS)
+            with self._lock:
+                pending = list(self._pending_gpd.items())
+            for path, first_seen in pending:
+                complete = is_gpd_complete(path)
+                if complete or time.time() - first_seen > GPD_TIMEOUT_SECONDS:
+                    with self._lock:
+                        self._pending_gpd.pop(path, None)
+                        self._done_gpd.add(path)
+                    if complete:
+                        self.event_queue.put(("created", path, ""))
 
     def parse_file(self, path, delay=2):
         parsed = self._try_parse_with_retries(path, delay=delay)
@@ -39,10 +86,11 @@ class SterilabelApp:
             return self._handle_parsed_pro(parsed)
 
     def _try_parse_with_retries(self, path, retries=5, delay=2):
-        import time
         for _ in range(retries):
             try:
                 time.sleep(delay)
+                if path.lower().endswith(".gpd"):
+                    return self.parse_gpd_file(path)
                 return self.parse_pro_file(path)
             except:
                 time.sleep(delay)
@@ -68,6 +116,37 @@ class SterilabelApp:
         self.show_image(tmp, p.get("success_message"))
         return lines
 
+    def parse_gpd_file(self, filepath):
+        """Reads the header/footer lines of a .GPD file ("<NNN Label | value")."""
+        fields = {}
+        for raw in read_text_lines(filepath):
+            m = re.match(r"<(\d{3})\s[^|]*\|\s*(.*)$", raw)
+            if m:
+                fields[m.group(1)] = m.group(2).strip()
+
+        if "140" not in fields:
+            raise ValueError(f"Fichier GPD incomplet : {filepath}")
+
+        program = fields.get("015", "")
+        success = fields.get("140") == "1"
+        if not success:
+            message = f"{program} : échec (résultat {fields.get('140')})"
+        elif program.lower().startswith("test vide"):
+            message = "Test Réussi"
+        else:
+            message = f"{program} Terminé avec Succès"
+
+        return {
+            "filename": os.path.splitext(os.path.basename(filepath))[0],
+            "date": fields.get("025"),
+            "charges_jour": fields.get("030"),
+            "total": fields.get("035"),
+            "chargement_id": "-",   # not present in the .GPD
+            "success": success,
+            "success_message": message,
+            "serial_number": fields.get("080"),
+        }
+
     def parse_pro_file(self,filepath):
         result = {
             "filename": os.path.splitext(os.path.basename(filepath))[0],
@@ -80,14 +159,7 @@ class SterilabelApp:
             "serial_number": None
         }
 
-        try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                lines = [ln.rstrip("\n\r") for ln in f]
-        except UnicodeDecodeError:
-            with open(filepath, "r", encoding="latin-1") as f:
-                lines = [ln.rstrip("\n\r") for ln in f]
-
-        for raw in lines:
+        for raw in read_text_lines(filepath):
             line = raw.strip()
             if line.startswith("25") and "Date" in line:
                 m = re.search(r"Date[:\s]*([\d\./-]+.*)$", line)
@@ -158,22 +230,54 @@ class SterilabelApp:
 # -------------------------
 # Watchdog
 # -------------------------
-class PROFileHandler(FileSystemEventHandler):
-    def __init__(self, event_queue):
+class CycleFileHandler(FileSystemEventHandler):
+    def __init__(self, app):
         super().__init__()
-        self.event_queue = event_queue
+        self.app = app
 
     def on_created(self, event):
-        if not event.is_directory and event.src_path.lower().endswith(".pro"):
-            self.event_queue.put(("created", event.src_path, ""))
+        if event.is_directory:
+            return
+        path = event.src_path.lower()
+        if path.endswith(".gpd"):
+            self.app.on_gpd_seen(event.src_path)
+        elif path.endswith(".pro"):
+            self.app.on_pro_created(event.src_path)
 
-#    def on_moved(self, event):
-#        if not event.is_directory and event.dest_path.lower().endswith(".pro"):
-#            self.event_queue.put(("created", event.dest_path))
+    def on_modified(self, event):
+        if not event.is_directory and event.src_path.lower().endswith(".gpd"):
+            self.app.on_gpd_seen(event.src_path)
 
 # -------------------------
 # Helpers
 # -------------------------
+def read_text_lines(filepath):
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            return [ln.rstrip("\n\r") for ln in f]
+    except UnicodeDecodeError:
+        with open(filepath, "r", encoding="latin-1") as f:
+            return [ln.rstrip("\n\r") for ln in f]
+
+def is_gpd_complete(path):
+    """True once the autoclave has written the end of the .GPD file."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            f.seek(max(0, f.tell() - 4096))
+            tail = f.read()
+    except OSError:
+        return False
+    return GPD_END_MARKER.encode() in tail
+
+def find_sibling(path, ext):
+    """Same file name with another extension, whatever its case."""
+    base = os.path.splitext(path)[0]
+    for candidate in (base + ext.upper(), base + ext.lower()):
+        if os.path.exists(candidate):
+            return candidate
+    return None
+
 def current_mm_yyyy_folder(root, when=None):
     when = when or datetime.datetime.now()
     return os.path.join(root, f"{when.month:02d}_{when.year}")
